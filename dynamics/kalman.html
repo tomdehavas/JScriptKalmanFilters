@@ -1,0 +1,2750 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+
+<html>
+
+	<script>
+//00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000111111111111111111111111111111111111111111111111111111111111      
+//00000000111111111122222222223333333333444444444455555555556666666666777777777788888888889999999999000000000011111111112222222222333333333344444444445555555555
+//23456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Start of Script                                                            *
+*                                                                              *
+*   Title dynamics and Kalman filters                                          *
+*                                                                              *
+*   Author: Tom de Havas                                                       *
+*                                                                              *
+*   Date: 28 March 2017                                                        *
+*                                                                              * 
+*                                                                              *
+********************************************************************************
+
+The code with the Kalman filters is near the bottom of the file.
+
+There is a great deal of material on Kalman filters online but the use of 
+different names for the same variables and an approach of understanding the 
+method of calculation rather than the calculation can make some of it difficult 
+to implement anything from. 
+
+So rather than provide another attempt to explain it without implementing it or 
+to implement it without explaining it, I thought I would provide an 
+implementation in javascript. Not my first choice of language but easily 
+accessible to all.
+
+
+********************************************************************************
+*                                                                              *
+*   Introduction                                                               *
+*                                                                              *
+********************************************************************************
+
+
+********************************************************************************
+*   Description                                                                *
+********************************************************************************
+
+This program simulates a real world in which there is a object. It also 
+simulates the objects guidance computer and the sensors feeding it namely GPS, 
+a magnetometer and linear and angular accelerometers. 
+
+The screen shows the simulated guidence computers estimation of the object 
+position in green, the simulated real world position of the object in red and 
+the measured position of the object in grey. Often the red is obscured by the 
+green indicating the guidance computer and it's Kalman fitering is doing a 
+good job.
+
+You can set the location "marked by a green grey dot" you want the object to 
+fly to by moving the mouse scroll wheel. It sets the distance away. Use the 
+mouse pointer for left-right up-down position.
+
+You can also set the desired angle of the object by moving the mouse and scroll 
+wheel with the left mouse button depressed.
+
+Give this file a name like kalman.html and drag it to a web-browser to see it 
+work.
+
+
+********************************************************************************
+*   Purpose                                                                    *
+********************************************************************************
+
+The purpose of this code is to demonstrate Kalman filtering to an extent where 
+it can form a starting point for an autonomous object of some kind. 
+
+The code was not written for effeciancy, it was written for clarity.
+
+
+
+*/
+
+var DEBUG = false;
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Mathematics Libraries                                                      *
+*                                                                              *
+*   Author: Tom de Havas                                                       *
+*                                                                              *
+*   Date: 28 March 2017                                                        *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide vector and matrix functionality
+ * 
+ * Most of the functions are intended for inline use and so return their results 
+ * as a reference to a new vector or matrix. This uses a lot of heap memory and 
+ * therefore is not optimal or safe but it makes the code more readable.
+ * 
+ * Nearly all functions first perameters are the dimensions of the vector or 
+ * resulting matrix. So for a transpose it is the dimensions of the output 
+ * rather than the input matrix that are quoted. The matrix multiplication function multMatrices() has three 
+ * dimension perameters as follows; 
+ * (1) the number of rows in the first input matrix and in the output matrix,
+ * (2) the number of columns in the first matrix and rows in the second input matrix,
+ * (3) the number of columns in the second input matrix and in the output matrix,
+ * 
+ * Divisions and subtractions return 1stOperand/2ndOperant and 1stOperand-2ndOperant.
+ * 
+ * Functions starting with copy return nothing and copy the 2ndOperant into the 1stOperand. 
+ * 
+ * Division by 0 is currently not protected against and will return NaN. TODO
+ * 
+ * Functions like inversion of matrices currently will behave unpredictable when the matrix has no inverse. TODO
+ * 
+ * Functions like crossprodVectors3(u,v) are only implemented for vectors of dimension 3 and so 
+ * have no dimension perameters. 
+ * 
+ * A range of quaternion functions are provided including for converting 
+ * rotation vectors into quaternions and visa-versa.
+ * 
+ * Also some noise generator functions are provided returning normal distribution noise
+ * 
+ * 
+ * 
+ */
+
+
+var BIG_NUMBER = 1e20;
+var SMALL_NUMBER = 1e-20;
+
+/*******************************************************************************
+*   Vectors                                                                    *
+*******************************************************************************/
+
+
+	function createVectorCopy(imax,u)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<u.length;i++)
+			o[i]=u[i];
+		return o;
+		}
+
+
+	function copyVector(imax,u,v)
+		{
+		for(var i=0;i<imax;i++)
+			u[i]=v[i];
+		return;
+		}
+
+
+	function negVector(imax,v)
+		{
+		var o=new Array(imax); 
+		for(var i=0;i<imax;i++)
+			o[i]=-v[i];
+		return o;
+		}
+
+
+	function multVectorByScalar(imax,v,a)
+		{
+		var o=new Array(imax); 
+		for(var i=0;i<imax;i++)
+			o[i]=v[i]*a;
+		return o;
+		}
+
+
+	function divVectorByScalar(imax,v,a)
+		{
+		var o=new Array(imax); 
+		for(var i=0;i<imax;i++)
+			o[i]=v[i]/a;
+		return o;
+		}
+
+
+	function addVectors(imax,u,v)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			o[i]=u[i]+v[i];
+		return o;
+		}
+
+
+	function subVectors(imax,u,v)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			o[i]=u[i]-v[i];
+		return o;
+		}
+
+
+	function inprodVectors(imax,u,v)
+		{
+		var o=0; 
+		for(var i=0;i<imax;i++)
+			o+=u[i]*v[i];
+		return o;
+		}
+
+
+	function dirprodVectors(imax,u,v)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			o[i]=u[i]*v[i];
+		return o;
+		}
+
+
+	function dirdivVectors(imax,u,v)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			{
+			if(0==u[i] && 0==v[i]) o[i]=0;
+			else o[i]=u[i]/v[i];
+			}
+		return o;
+		}
+
+
+	function outprodVectors(imax,jmax,u,v)
+		{
+		O = createMatrix(imax,jmax);
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=u[i]*v[j];
+			}
+		return O;
+		}
+
+
+	function lenVector(imax,u)
+		{
+		var s=0;
+		for(var i=0;i<imax;i++)
+			s+=u[i]*u[i]; 
+		return Math.sqrt(s);	
+		}
+
+
+
+
+/*******************************************************************************
+*   3d-Vectors only                                                            *
+*******************************************************************************/
+
+
+	//Cross products are always 3 dimensional
+	function crossprodVectors3(u,v)
+		{
+		var o=[0,0,0];
+		o[0]=u[1]*v[2]-u[2]*v[1];
+		o[1]=u[2]*v[0]-u[0]*v[2];
+		o[2]=u[0]*v[1]-u[1]*v[0];
+		return o;
+		}
+
+	//Cross products are always 3 dimensional
+	function crossprodVectorMatrix33(u,M)
+		{
+		var N = [[0,-u[2],u[1]],[u[2],0,-u[0]],[-u[1],u[0],0]];
+		return multMatrices(3,3,3,N,M);
+		}
+
+
+	/**
+	 * t is an estimated rotation vector 	
+	 * There is a rotation vector that has mapped the vector u onto the vector v. 
+	 * The rotation vectors that can do this all occupy a plane between u and v such that u is the reflection of v in the plane and visa versa.
+	 * t is an estimated rotation vector which may be outside the plane due to deviation in the estimate.
+	 * This function returns a vector which is the vector t projected onto the plane, and serves to improve on the estimation of t.
+	 * 
+	 * Hovever when u and v are very close together and given the possible variances in both we can end up with serious errors in t TODO
+	 */
+	function getConstrainVectorToPlaneOfTwoVectors3(t,u,v)
+		{
+		var o=[0,0,0];
+		var e0=[0,0,0];
+		var e1=[0,0,0];
+
+		//Check for zero vectors and act correctly
+		var vv=lenVector(3,v);
+		if(SMALL_NUMBER>vv) return 1;
+		var uu=lenVector(3,u);
+		if(SMALL_NUMBER>uu) return 1;
+
+		var ct = inprodVectors(3,u,v) / (uu*vv);
+		if(ct>1-SMALL_NUMBER) return 1;
+
+
+ 		//Set up basis vectors e0 parallel to v and e1 perpendicular to v in the plane of u and v
+		e0 = addVectors(3,multVectorByScalar(3,u,vv),multVectorByScalar(3,v,uu));
+		e0 = multVectorByScalar(3,e0,1/lenVector(3,e0));
+
+		e1 = crossprodVectors3(u,v);
+		if(SMALL_NUMBER>lenVector(3,e1)) return 1;
+		e1 = multVectorByScalar(3,e1,1/lenVector(3,e1));
+
+		//Now define the new vector
+		o=multVectorByScalar(3, e0,inprodVectors(3,t,e0));
+		o=addVectors(3, o,multVectorByScalar(3, e1,inprodVectors(3,t,e1)));
+		copyVector(3, t,o);
+		return ct;
+		}
+
+
+
+
+/*******************************************************************************
+*   Matrices and vectors                                                       *
+*******************************************************************************/
+
+
+	function createMatrix(imax,jmax)
+		{
+		var O=new Array(imax);
+		for(var i=0;i<imax;i++)
+			O[i]=new Array(jmax);
+		return O;
+		}
+
+
+	function createMatrixZero(imax,jmax)
+		{
+		var O=new Array(imax);
+		for(var i=0;i<imax;i++)
+			O[i]=new Array(jmax).fill(0.0);
+		return O;
+		}
+
+
+	function createMatrixIdentity(imax,jmax)
+		{
+		var O=new Array(imax);
+		for(var i=0;i<imax;i++)
+			{
+			O[i]=new Array(jmax).fill(0.0);
+			O[i][i]=1; //Reset the diagonal row to 1s
+			}
+		return O;
+		}
+
+
+	function createMatrixDiagonal(imax,jmax,u)
+		{
+		var O=new Array(imax);
+		for(var i=0;i<imax;i++)
+			{
+			O[i]=new Array(jmax).fill(0.0);
+			O[i][i]=u[i]; //Reset the diagonal row to u[i]
+			}
+		return O;
+		}
+
+
+	function createMatrixCopy(imax,jmax,M)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				{
+				O[i][j]=M[i][j];
+				}
+			}
+		return O;
+		}
+
+
+	function copyMatrix(imax,jmax,M,N)
+		{
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				{
+				M[i][j]=N[i][j];
+				}
+			}
+		return;
+		}
+
+
+	function multMatrixVector(imax,jmax,M,u)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			{
+			o[i]=0.0;
+			for(var j=0;j<jmax;j++)
+				{o[i]+=M[i][j]*u[j];}
+			}
+		return o;
+		}
+
+
+	function addmultVectorMatrixVector(imax,jmax,v,M,u)
+		{
+		var o=new Array(imax);
+		for(var i=0;i<imax;i++)
+			{
+			o[i]=v[i];
+			for(var j=0;j<jmax;j++)
+				o[i]+=M[i][j]*u[j];
+			}
+		return o;
+		}
+
+
+
+
+/*******************************************************************************
+*   Matrices                                                                   *
+*******************************************************************************/
+
+
+	function transMatrix(imax,jmax,M)
+		{
+		var O=createMatrix(imax,jmax); 
+
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=M[j][i];
+			}
+		return O;
+		}
+
+
+	function negMatrix(imax,jmax,M)
+		{
+		var O=createMatrix(imax,jmax); 
+
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=-M[i][j];
+			}
+		return O;
+		}
+
+
+	function diagMatrix(imax,jmax,M)
+		{
+		var O=createMatrixZero(imax,jmax); 
+
+		for(var i=0;i<imax;i++)
+				O[i][i]=M[i][i];
+		return O;
+		}
+
+
+	function maskMatrix(imax,jmax,M,N)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=M[i][j]*N[i][j];
+			}
+		return O;
+		}
+
+
+	function multMatrixScalar(imax,jmax,M,s)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				{
+				O[i][j]=M[i][j]*s;
+				}
+			}
+		return O;
+		}
+
+
+	function divMatrixScalar(imax,jmax,M,s)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				{
+				O[i][j]=M[i][j]/s;
+				}
+			}
+		return O;
+		}
+
+
+	function addMatrices(imax,jmax,M,N)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=M[i][j]+N[i][j];
+			}
+		return O;
+		}
+
+
+	function subMatrices(imax,jmax,M,N)
+		{
+		var O=createMatrix(imax,jmax); 
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				O[i][j]=M[i][j]-N[i][j];
+			}
+		return O;
+		}
+
+
+	function multMatrices(imax,jmax,kmax,M,N)
+		{
+		var O=createMatrix(imax,jmax); 
+		var i,j,k;
+		for(var i=0;i<imax;i++)
+			{
+			for(var k=0;k<kmax;k++)
+				{
+				O[i][k] = 0;
+				for(var j=0;j<jmax;j++)
+					{
+					/*if(0!=M[i][j] && 0!=N[j][k])*/ 
+					O[i][k]+=M[i][j]*N[j][k]; 
+					/*if(isNaN(O[i][k])) 
+						{
+						displayMatrix(imax,jmax,M,-500,0);
+						displayMatrix(imax,jmax,N,0,0);
+						alert("NaN M="+M[i][j]+" N="+N[j][k]+" ");
+						}*/
+					}
+				}
+			}
+		return O;
+		}
+
+
+  //gaussjorden inverse calculation*/
+	function invMatrix(imax,jmax,M) //TODO catch non-invertable matrices
+		{
+		var O=createMatrixIdentity(imax,jmax); 
+		var I=createMatrix(imax,jmax);
+
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				I[i][j]=M[i][j];
+			}
+
+		for(var i=0;i<imax;i++)
+			{
+			//Scale factor the row for 1 in diagonal assume left diagonal is all 0
+			if(0==I[i][i]) continue;
+			sf=1/I[i][i];
+			for(var j=0;j<imax;j++)
+				{I[i][j]*=sf;O[i][j]*=sf}
+
+			//Subtract multiples of row i from all others to get 0 in column below
+			for(i2=0;i2<imax;i2++)
+				{
+				//Scale factor the row
+				if(i2==i) continue;
+				sf=I[i2][i];
+				for(var j=0;j<imax;j++)
+					{I[i2][j]-=I[i][j]*sf;O[i2][j]-=O[i][j]*sf;}
+				}
+			}
+		return O;
+		}
+
+
+	//Return the rotation matrix corresponding to the rotation vector v according to the right hand rule
+	function getRotationMatrixFromRotvec33(v)
+		{
+		var u=[0,0,0];
+		var O=[
+						[1,0,0],
+						[0,1,0],
+						[0,0,1]
+					]; 
+
+		var a=lenVector(3,v);
+
+		if(0==a) return O;
+
+		var sn=Math.sin(a);
+		var cs=Math.cos(a);
+		var xcs=1-cs;
+
+		u[0]=v[0]/a;
+		u[1]=v[1]/a;
+		u[2]=v[2]/a;
+
+		O[0][0] = u[0]*u[0]*xcs + cs;
+		O[0][1] = u[0]*u[1]*xcs - u[2]*sn;
+		O[0][2] = u[0]*u[2]*xcs + u[1]*sn;
+
+		O[1][0] = u[1]*u[0]*xcs + u[2]*sn;
+		O[1][1] = u[1]*u[1]*xcs + cs;
+		O[1][2] = u[1]*u[2]*xcs - u[0]*sn;
+
+		O[2][0] = u[2]*u[0]*xcs - u[1]*sn;
+		O[2][1] = u[2]*u[1]*xcs + u[0]*sn;
+		O[2][2] = u[2]*u[2]*xcs + cs;
+		return O;
+		}
+
+
+	function copyMatrixInToMatrix(M,imax,jmax,S,ioff,joff)
+		{
+		for(var i=0;i<imax;i++)
+			{
+			for(var j=0;j<jmax;j++)
+				M[i+ioff][j+joff]=S[i][j]; 
+			}
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*   Quaternions                                                                *
+*******************************************************************************/
+/*
+https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
+https://www.youtube.com/watch?v=q-ESzg03mQc
+https://www.youtube.com/watch?v=BXajpAy5-UI
+Also see
+https://en.wikipedia.org/wiki/Quaternion#History
+https://en.wikipedia.org/wiki/Rotation_group_SO(3)
+
+
+https://gamedev.stackexchange.com/questions/18036/problem-representing-torque-as-a-quaternion
+http://www.cs.cmu.edu/~baraff/sigcourse/notesd1.pdf
+*/
+
+
+	function addQuaternion(q,r)
+		{
+		var s=[0,0,0,0]; 
+		for(var i=0;i<4;i++)
+				s[i] = q[i] + r[i];
+		return s;
+		}
+
+
+	function multQuaternion(q,r)
+		{
+		var s = [0,0,0,0]; 
+		s[0] = q[0]*r[0] - q[1]*r[1] - q[2]*r[2] - q[3]*r[3];
+		s[1] = q[0]*r[1] + q[1]*r[0] + q[2]*r[3] - q[3]*r[2];
+		s[2] = q[0]*r[2] - q[1]*r[3] + q[2]*r[0] + q[3]*r[1];
+		s[3] = q[0]*r[3] + q[1]*r[2] - q[2]*r[1] + q[3]*r[0];
+		return s;
+		}
+
+
+	function conjQuaternion(q)
+		{
+		var s=[+q[0],-q[1],-q[2],-q[3]]; 
+		return s;
+		}
+
+
+	function normQuaternion(q)
+		{
+		var l = lenVector(4,q);
+		if(0==l) return [0,0,0,0];
+		//var s=[q[0]/l,q[1]/l,q[2]/l,q[3]/l]; 
+		return [q[0]/l,q[1]/l,q[2]/l,q[3]/l];
+		}
+
+
+	function negconjQuaternion(q)
+		{
+		var s=[+q[0],-q[1],-q[2],+q[3]]; 
+		return s;
+		}
+
+
+	function getQuaternionForBase(b,a)
+		{
+		var s = [1,0,0,0]; 
+		if(0==a) return s;
+		var sn=Math.sin(a/2);
+		var cs=Math.cos(a/2);
+		s[0] = cs;
+		s[b+1] = sn;
+		return s;
+		}
+
+
+	function getQuaternionFromRotvec(v)
+		{
+		var s = [1,0,0,0]; 
+		var a=lenVector(3,v);
+		if(0==a) return s;
+		var sn=Math.sin(a/2);
+		var cs=Math.cos(a/2);
+		s[0] = cs;
+		s[1] = v[0]*sn/a;
+		s[2] = v[1]*sn/a;
+		s[3] = v[2]*sn/a;
+		return s;
+		}
+
+
+	function getRotvecFromQuaternion(s)  //TODO really check this works for all quaternions that acos function might invert a sign
+		{
+		var v = [0,0,0]; 
+		//if(s[0]>1) s[0]=1;
+		//if(s[0]<-1) s[0]=-1;
+		a=2*Math.acos(s[0]);
+		cs=s[0];
+		sn=Math.sqrt(1-cs*cs);
+		if(0==sn) return v;
+		v[0] = s[1]*a/sn;
+		v[1] = s[2]*a/sn;
+		v[2] = s[3]*a/sn;
+
+		return v;
+		}
+
+
+	function rotateVectorByQuaternion(v,q)
+		{
+		var r = [0,v[0],v[1],v[2]];
+		r=multQuaternion(multQuaternion(q,r),conjQuaternion(q));
+		return [r[1],r[2],r[3]];
+		}
+
+
+	function rotatebackVectorByQuaternion(v,q)
+		{
+		var r = [0,v[0],v[1],v[2]];
+		r=multQuaternion(multQuaternion(conjQuaternion(q),r),q);
+		return [r[1],r[2],r[3]];
+		}
+
+
+
+
+/*******************************************************************************
+*   Noise generator functions                                                  *
+*******************************************************************************/
+
+//These functions provide all the randomness in the program
+
+//This function currently returns average 0 and standard deviation 1 Multiplying z0 the returned value by the required standard deviation and adding the required average
+
+	var generate=1;
+	var  z0, z1;
+
+	function noiseNormal()
+		{
+		var epsilon = 1e-5;
+		var two_pi = 2.0*3.14159265358979323846;
+		generate = -generate;
+		if (generate>0) return z1;
+
+		var u1, u2;
+		do{
+			u1 = Math.random();
+			u2 = Math.random();
+			} while ( u1 <= epsilon );
+
+		z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(two_pi * u2);
+		z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(two_pi * u2);
+
+		return z0;
+		}
+
+
+//This function currently returns a 3 dimensional brownian noise vector and is used as the wind in the world*/
+	var wind=[0,0,0,0,0,0];
+	var sw=1;
+	function noise6Brown(v)
+		{
+		var o=[0,0,0,0,0,0];
+		for(var i=0;i<o.length;i++)
+			{
+			wind[i]=wind[i]*0.999+sw*noiseNormal();
+			o[i]=wind[i]*v[i];
+			}
+		if(sw==1) sw=-1; else sw=1;
+		return o;
+		}
+
+
+//This function currently returns imax independent noise values with average 0 and standard deviation 1. These can be multiplied by mixer matrices to get a noise vector of any magnitude and with chosen correlation values
+
+	function noiseVector(imax)
+		{
+		var o=[]; 
+
+		for(var i=0;i<imax;i++)
+				o[i]=noiseNormal();
+		return o;
+		}
+
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Display output functions                                                   *
+*                                                                              *
+*   Author: Tom de Havas                                                       *
+*                                                                              *
+*   Date: 28 March 2017                                                        *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide 2d and 3d display functionality and are intended 
+ * for displaying mathematical graphical output. The 3d rendering uses 
+ * depth cueing meaning lines that are further away get darker. This supports 
+ * visual interpretation of the wire frame images, these being far easier to 
+ * render than solid objects and well within Javascript's capabilities.
+ * 
+ * The module sets up the rendering scaling constants to use the space 
+ * available in the browser.
+ * 
+ * The range of the plotting axes can be set here.
+ */
+
+	//INPUT The size of the axes and grid are set here
+	const xmax = 1;
+	const xmin = -1;
+	const xdiv = 0.2;
+	var ymax = 1;
+	var ymin = -1;
+	const ydiv = 0.2;
+
+/**
+ * Note that when plotting in 3 dimensions the x-axis is depth into the screen
+ * the y-axis goes to the right and the z-axis goes up. In 3d vectors the 
+ * componants are [x,y,z]
+ * 
+ * Rendering in 3d uses simple perspective zz is the distance at which something  
+ * will appear to be half the size.
+ */ 
+	const zz=2; //Perspective
+
+
+/** 
+ * Size scales according to 1/(1+x/zz)
+ * 
+ * 
+ */
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display basic functions                                                    *
+*                                                                              *
+*******************************************************************************/
+
+
+	//Global scaling constants declared here and setup with values by displayStart()
+	var grLB;
+	var grXS; 
+	var grXC;
+	var grYS;
+	var grYC;
+	var fontsize = 16;
+
+	//Context
+	var ctx;
+
+
+	function displayStart()
+		{
+		//Setup the canvas context
+		ctx= myCanvas.getContext('2d');
+
+		ctx.canvas.width  = window.innerWidth;
+		ctx.canvas.height = window.innerHeight;
+
+		var shrink = ctx.canvas.height / ctx.canvas.width;
+		ymax = Math.floor(ymax*shrink/ydiv+0.5)*ydiv;
+		ymin = Math.ceil(ymin*shrink/ydiv-0.5)*ydiv;
+
+		//Setup scaling constants
+		grLB = 30;
+		grXS = (ctx.canvas.width-grLB*2)/(xmax-xmin); 
+		grXC = grLB*1 - grXS*xmin;
+		grYS = - (ctx.canvas.height-grLB*2)/(ymax-ymin);
+		grYC = ctx.canvas.height - grLB*1 - grYS*ymin;
+
+		fontsize = 16/475*grXS;
+		return;
+		}
+
+
+	function displayFinish()
+		{
+		//Nothing to do at the moment
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display clear and 2d functions                                             *
+*                                                                              *
+*******************************************************************************/
+
+
+	function displayClear()
+		{
+		ctx.fillStyle="#000000";
+		ctx.fillRect(0,0, ctx.canvas.width, ctx.canvas.height);
+		return;
+		}
+
+
+	function displayAxes()
+		{
+		ctx.fillStyle="#000000";
+		ctx.font = fontsize+"px Sans"
+		ctx.textAlign = "center";
+		ctx.fillStyle="#aaaa66";
+		ctx.fillText("Time "+Math.floor(timeFromStarting*10)/10, grXC+grXS*xmax-grLB*2, grYC+grYS*ymax+grLB);
+
+		//Grids & Axes
+		ctx.beginPath();
+		ctx.strokeStyle="#666622";
+		ctx.fillStyle="#aaaa66";
+		ctx.lineWidth=2;
+
+		// Y axis 
+		ctx.textAlign = "right";
+		for(y=ymin; y<=ymax; y+=ydiv)
+			{
+			ctx.moveTo(grXC+grXS*xmin, grYC+grYS*y );
+			ctx.lineTo(grXC+grXS*xmax, grYC+grYS*y );
+			//ctx.fillText((Math.round(y*1e10)/1e10), grXC+grXS*0-fontsize/4, grYC+grYS*y+fontsize/4);
+			}
+		ctx.textAlign = "center";
+		ctx.save();
+		ctx.translate(grXC+grXS*0-grLB*1.3,grYC+grYS*ymax/2);
+		ctx.rotate(-Math.PI/2);
+		//ctx.fillText("z-axis",0,0);
+		ctx.restore();
+
+		// X axis 
+		ctx.textAlign = "center";
+		for(x=xmin; x<=xmax; x+=xdiv)
+			{
+			ctx.moveTo(grXC+grXS*x, grYC+grYS*ymax);
+			ctx.lineTo(grXC+grXS*x, grYC+grYS*ymin);
+			//ctx.fillText((Math.round(x*1e10)/1e10), grXC+grXS*x, grYC+grYS*0+fontsize);
+			}
+		//ctx.fillText("y-axis", grXC+grXS*xmax/2, grYC+grYS*0+fontsize*2);
+		ctx.stroke();
+		ctx.closePath();
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display numeric data functions                                             *
+*                                                                              *
+*******************************************************************************/
+
+
+/**
+ * The functions below provide for the display of scalars, vectors and matrices
+ * on the screen.
+ * 
+ * 
+ * @param - x, y - position to the right in the same coordinates as the axes are 
+ *                 displayed in.
+ * 
+ * @param - title - a title for what is to be displayed.
+ * 
+ * @param - imax - number of rows in the item to display.
+ * 
+ * @param - jmax -  number of columns in the item to display.
+ * 
+ * 
+ */
+
+
+	function displayTitle(x,y,title)
+		{
+		ctx.font = fontsize+"px Sans";
+		ctx.textAlign = "right";
+		ctx.fillStyle="#aaaa66";
+		var w=ctx.measureText(title).width;
+
+		ctx.fillText(title, grXC+grXS*x+w, grYC+grYS*y+fontsize);
+		//ctx.fillText(s, grXC+grXS*x+fontsize/2, grYC+grYS*y+fontsize);
+		return;
+		}
+
+
+	function displayScalar(scalar,title,x,y)
+		{
+		ctx.font = fontsize+"px Sans";
+		ctx.textAlign = "right";
+		ctx.fillStyle="#aaaa66";
+		var w=ctx.measureText(" -0.0000").width;
+
+		ctx.fillText(title, grXC+grXS*x+w, grYC+grYS*y+fontsize);
+		ctx.fillText(scalar.toFixed(4), grXC+grXS*x+w, grYC+grYS*y+2.5*fontsize);
+		return;
+		}
+
+
+	function displayVector(imax,vector,title,x,y)
+		{
+		ctx.font = fontsize+"px Sans";
+		ctx.textAlign = "right";
+		ctx.fillStyle="#aaaa66";
+		var w=ctx.measureText(" -0.0000").width;
+
+		ctx.fillText(title, grXC+grXS*x+w, grYC+grYS*y+fontsize);
+		for(var i=0;i<imax;i++)
+			ctx.fillText(vector[i].toFixed(4), grXC+grXS*x+w, grYC+grYS*y+(i+2.5)*fontsize);
+		return;
+		}
+
+
+	function displayMatrix(imax,jmax,matrix,title,x,y)
+		{
+		ctx.font = fontsize+"px Sans";
+		ctx.textAlign = "right";
+		ctx.fillStyle="#aaaa66";
+		var w=ctx.measureText("0.0000").width;
+		//w = grXS/10*Math.floor(w/grXS*10);
+		ctx.textAlign = "left";
+		ctx.fillText("  "+title, grXC+grXS*x, grYC+grYS*y+fontsize);
+		ctx.textAlign = "right";
+		for(var i=0;i<imax;i++)
+			{
+			ii=i+Math.floor(i/3)*0.75;
+			for(var j=0;j<jmax;j++)
+				{
+				jj=j + Math.floor(j/3)/4;
+				if(matrix[i][j]<0.001 && matrix[i][j]>-0.001) ctx.fillStyle="#555533"; else ctx.fillStyle="#aaaa66";
+				ctx.fillText(matrix[i][j].toFixed(3), grXC+grXS*x+(jj+1)*w, grYC+grYS*y+(ii+2.5)*fontsize);
+				}
+			}
+
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display 3d plotting functions                                              *
+*                                                                              *
+*******************************************************************************/
+
+
+	function displayRGB(col,l)
+		{
+		if(l>1) l=1;
+		if(l<0) l=0;
+		var decColor =0x1000000+ Math.floor(col[2]*l) + 0x100 * Math.floor(col[1]*l) + 0x10000 *Math.floor(col[0]*l) ;
+		var t= '#'+decColor.toString(16).substr(1);
+		return t;
+		}
+
+
+	var lastXY=[0,0,0];
+	function display3dMoveTo(point,linposWorldCoord,angmat,solidMaxdim,colour)
+		{
+		var pt= multMatrixVector(3,3,angmat,point); //Take the object point and rotate it using the matrix
+		var cmpt = linposWorldCoord; //Find the centre of mass point
+		pt=addVectors(3,pt,cmpt); //Add the position of the object to get the point in space
+		//Calculate the 2d position to plot and remember the distance
+		var thisXY=[ grXC+grXS*pt[1]/(1+pt[0]/zz), grYC+grYS*pt[2]/(1+pt[0]/zz), (-pt[0]/solidMaxdim*0.8+1.4)/2];
+		lastXY=thisXY;
+		return pt;
+		}
+
+
+	function display3dLineTo(point,linposWorldCoord,angmat,solidMaxdim,colour)
+		{
+		var pt= multMatrixVector(3,3,angmat,point); //Take the object point and rotate it using the matrix
+		var cmpt = linposWorldCoord; //Find the centre of mass point
+		pt=addVectors(3,pt,cmpt); //Add the position of the object to get the point in space
+		//Calculate the 2d position to plot and remember the distance
+		var thisXY=[ grXC+grXS*pt[1]/(1+pt[0]/zz), grYC+grYS*pt[2]/(1+pt[0]/zz), (-pt[0]/solidMaxdim*0.8+1.4)/2];
+		//Plot it
+		ctx.beginPath();
+
+		/*var gradient=ctx.createLinearGradient(thisXY[0],thisXY[1],lastXY[0],lastXY[1]);
+		gradient.addColorStop("1.0",displayRGB(colour,lastXY[2]));
+		gradient.addColorStop("0.0",displayRGB(colour,thisXY[2]));
+
+		ctx.strokeStyle=gradient;*/
+		ctx.strokeStyle=displayRGB(colour,thisXY[2]);
+		ctx.lineWidth=1*zz/(zz+pt[2]/1000);
+		ctx.moveTo(lastXY[0],lastXY[1]);
+		ctx.lineTo(thisXY[0],thisXY[1]);
+		ctx.stroke();
+
+		ctx.closePath();
+
+		lastXY=thisXY;
+		return pt;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display 3d output object library functions                                 *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide some basic 3d objects that can be displayed.
+ * 
+ * The first line parameters gives the size of the object and the second line 
+ * gives a position vector rotation vector according to the right hand rule.
+ * The third line of parameters are about colour.
+ * 
+ */
+
+
+
+
+	function displayTorus(majRad2, tubeRad, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,
+		                 colourOfBody,colourOfMarker)
+		{
+		majRad1 = majRad2; //Currently I ignore ignored but one day it could be majRad1 or 2
+		//Calculate the object orientation matrix just once and pass to move and line functions 
+		var angmat = getRotationMatrixFromRotvec33(angposWorldCoord); //Get matrix to rotate from craft to world coords based on angposWorldCoord the angle of the world
+
+		var resb = Math.PI/12;
+		var resa = Math.PI/12;
+		//Draw the object using maths for the shape
+		for(a=0;a<=2*Math.PI+0.001;a+=resa)
+			{
+			csa=Math.cos(a);
+			sna=Math.sin(a);
+			//if(sn<0) sn/=2;
+			//ctx.beginPath();
+			//display3dMoveTo([0,0,0],linposWorldCoord,angmat,[0,255,0]);
+			for(b=-Math.PI; b<=Math.PI+0.001; b+=resb)
+				{
+				csb=Math.cos(b);
+				snb=Math.sin(b);
+				if(b<resb*12) cc=colourOfBody; else cc=colourOfMarker;
+				if(-Math.PI==b) display3dMoveTo(  [(majRad2+tubeRad*csa)*csb, tubeRad*sna, (majRad1+tubeRad*csa)*snb],   linposWorldCoord, angmat, solidMaxdim, cc);
+				else display3dLineTo(   [(majRad2+tubeRad*csa)*csb, tubeRad*sna, (majRad1+tubeRad*csa)*snb],   linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//ctx.closePath();
+			}
+/*
+		for(b=-Math.PI; b<=Math.PI+0.001; b+=resb)
+			{
+			csb=Math.cos(b);
+			snb=Math.sin(b);
+			for(a=0;a<=2*Math.PI+0.001;a+=resa)
+				{
+				csa=Math.cos(a);
+				sna=Math.sin(a);
+				//if(sn<0) sn/=2;
+				if(b<resb*12) cc=[0,255,0]; else cc=cc=[255,0,0];
+				if(0==a) display3dMoveTo(  [(majRad2+tubeRad*csa)*csb, tubeRad*sna, (majRad1+tubeRad*csa)*snb],   linposWorldCoord, angmat, solidMaxdim, cc);
+				else display3dLineTo(   [(majRad2+tubeRad*csa)*csb, tubeRad*sna, (majRad1+tubeRad*csa)*snb],   linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//display3dLineTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat,colourOfBody);
+			//ctx.closePath();
+			}
+*/
+		//ctx.stroke();
+		return;
+		}
+
+
+
+
+	function displayEllipsoid(dimx, dimy, dimz, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,
+		                 colourOfBody,colourOfMarker)
+		{
+		//Calculate the object orientation matrix just once and pass to move and line functions 
+		var angmat = getRotationMatrixFromRotvec33(angposWorldCoord); //Get matrix to rotate from craft to world coords based on angposWorldCoord the angle of the world
+
+		var resa = Math.PI/12;
+		var resb = Math.PI/12;
+		//Draw the object using maths for the shape
+		for(a=0;a<2*Math.PI;a+=resa)
+			{
+			csa=Math.cos(a);
+			sna=Math.sin(a);
+			//if(sn<0) sn/=2;
+			//ctx.beginPath();
+			//display3dMoveTo([0,0,0],vec18WorldCoordState,angmat,[0,255,0]);
+			for(b=-Math.PI/2; b<Math.PI/2; b+=resb)
+				{
+				csb=Math.cos(b);
+				snb=Math.sin(b);
+				if(b<resb*3) cc=colourOfBody; else cc=colourOfMarker;
+				if(-Math.PI/2==b) display3dMoveTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat, solidMaxdim, cc);
+				else display3dLineTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//ctx.closePath();
+			}
+
+		for(b=-Math.PI/2; b<Math.PI/2; b+=resb)
+			{
+			csb=Math.cos(b);
+			snb=Math.sin(b);
+			for(a=0;a<2*Math.PI;a+=resa)
+				{
+				csa=Math.cos(a);
+				sna=Math.sin(a);
+				//if(sn<0) sn/=2;
+				if(b<resb*3) cc=colourOfBody; else cc=colourOfMarker;
+				if(0==a) display3dMoveTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat, solidMaxdim, cc);
+				else display3dLineTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			display3dLineTo([dimx*snb,dimy*csa*csb,dimz*sna*csb],linposWorldCoord,angmat, solidMaxdim, cc);
+			//ctx.closePath();
+			}
+		//ctx.stroke();
+		return;
+		}
+
+
+
+
+	function displayCylinder(dimx, dimy, dimz, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,
+		                 colourOfBody,colourOfMarker)
+		{
+		//Calculate the object orientation matrix just once and pass to move and line functions 
+		var angmat = getRotationMatrixFromRotvec33(angposWorldCoord); //Get matrix to rotate from craft to world coords based on angposWorldCoord the angle of the world
+
+		var resa = Math.PI/12;
+		var resb = 1/2;
+		//Draw the object using maths for the shape
+
+		for(a=0;a<2*Math.PI;a+=resa)
+			{
+			csa=Math.cos(a);
+			sna=Math.sin(a);
+			//if(sn<0) sn/=2;
+			//ctx.beginPath();
+			//display3dMoveTo([0,0,0],vec18WorldCoordState,angmat,[0,255,0]);
+			cc=colourOfBody;
+			display3dMoveTo([0,-dimy,0],linposWorldCoord,angmat, solidMaxdim, cc);
+			for(b=-1; b<=1; b+=resb)
+				{
+				//csb=Math.cos(b);
+				//snb=Math.sin(b);
+				if(b>-1+resb/2) cc=colourOfBody; else cc=colourOfMarker;
+				//if(-Math.PI/2==b) display3dMoveTo([dimx*b,dimy*csa,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				//else
+				display3dLineTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			display3dLineTo([0,dimy,0],linposWorldCoord,angmat, solidMaxdim, cc);
+			//ctx.closePath();
+			}
+
+		for(b=-1; b<=1; b+=resb)
+			{
+			csb=Math.cos(b);
+			snb=Math.sin(b);
+			for(a=0;a<2*Math.PI;a+=resa)
+				{
+				csa=Math.cos(a);
+				sna=Math.sin(a);
+				//if(sn<0) sn/=2;
+				if(b>-1+resb/2) cc=colourOfBody; else cc=colourOfMarker;
+				if(0==a) display3dMoveTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				else display3dLineTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//ctx.closePath();
+			}
+
+		//ctx.stroke();
+		return;
+		}
+
+
+
+
+	function displayTube(dimx, dimy, dimz, dimxh, dimzh, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,
+		                 colourOfBody,colourOfMarker)
+		{
+		//Calculate the object orientation matrix just once and pass to move and line functions 
+		var angmat = getRotationMatrixFromRotvec33(angposWorldCoord); //Get matrix to rotate from craft to world coords based on angposWorldCoord the angle of the world
+
+		var resa = Math.PI/12;
+		var resb = 1/2;
+		//Draw the object using maths for the shape
+
+		for(a=0;a<2*Math.PI;a+=resa)
+			{
+			csa=Math.cos(a);
+			sna=Math.sin(a);
+			//if(sn<0) sn/=2;
+			//ctx.beginPath();
+			//display3dMoveTo([0,0,0],vec18WorldCoordState,angmat,[0,255,0]);
+			cc=colourOfBody;
+			display3dMoveTo([dimxh*csa,-dimy,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+			for(b=-1; b<=1; b+=resb)
+				{
+				//csb=Math.cos(b);
+				//snb=Math.sin(b);
+				if(a>2*resa) cc=colourOfBody; else cc=colourOfMarker;
+				//if(-Math.PI/2==b) display3dMoveTo([dimx*b,dimy*csa,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				//else
+				display3dLineTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			display3dLineTo([dimxh*csa,dimy,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+			cc=colourOfBody;
+			display3dMoveTo([dimxh*csa,-dimy,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+			for(b=-1; b<=1; b+=resb)
+				{
+				//csb=Math.cos(b);
+				//snb=Math.sin(b);
+				if(a>2*resa) cc=colourOfBody; else cc=colourOfMarker;
+				//if(-Math.PI/2==b) display3dMoveTo([dimx*b,dimy*csa,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				//else
+				display3dLineTo([dimxh*csa,dimy*b,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//ctx.closePath();
+			}
+
+		for(b=-1; b<=1; b+=resb)
+			{
+			csb=Math.cos(b);
+			snb=Math.sin(b);
+			for(a=0;a<2*Math.PI;a+=resa)
+				{
+				csa=Math.cos(a);
+				sna=Math.sin(a);
+				if(a>2*resa) cc=colourOfBody; else cc=colourOfMarker;
+				if(0==a) display3dMoveTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				else display3dLineTo([dimx*csa,dimy*b,dimz*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			for(a=0;a<2*Math.PI;a+=resa)
+				{
+				csa=Math.cos(a);
+				sna=Math.sin(a);
+				if(a>2*resa) cc=colourOfBody; else cc=colourOfMarker;
+				if(0==a) display3dMoveTo([dimxh*csa,dimy*b,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				else display3dLineTo([dimxh*csa,dimy*b,dimzh*sna],linposWorldCoord,angmat, solidMaxdim, cc);
+				}
+			//ctx.closePath();
+			}
+
+		//ctx.stroke();
+		return;
+		}
+
+
+
+
+	function displayCuboid(dimx, dimy, dimz, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,
+		                 colourOfBody,colourOfMarker)
+		{
+		//Calculate the object orientation matrix just once and pass to move and line functions 
+		var angmat = getRotationMatrixFromRotvec33(angposWorldCoord); //Get matrix to rotate from craft to world coords based on angposWorldCoord the angle of the world
+
+		var resx = dimx/4;
+		var resy = dimy/4;
+		var resz = dimz/4;
+		//Draw the object using maths for the shape
+
+		cc=colourOfMarker;
+		cc=colourOfBody;
+
+		for(z=-dimz; z<=dimz; z+=resz)
+			{
+			display3dMoveTo([dimx,dimy,z],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([-dimx,dimy,z],linposWorldCoord,angmat, solidMaxdim, cc);
+			cc=colourOfMarker;
+			display3dLineTo([-dimx,-dimy,z],linposWorldCoord,angmat, solidMaxdim, cc);
+			cc=colourOfBody;
+			display3dLineTo([dimx,-dimy,z],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([dimx,dimy,z],linposWorldCoord,angmat, solidMaxdim, cc);
+			}
+		cc=colourOfBody;
+
+
+		for(y=-dimy; y<=dimy; y+=resy)
+			{
+			display3dMoveTo([dimx,y,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([-dimx,y,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			cc=colourOfMarker;
+			display3dLineTo([-dimx,y,-dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			cc=colourOfBody;
+			display3dLineTo([dimx,y,-dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([dimx,y,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			}
+
+		for(x=-dimx; x<=dimx; x+=resx)
+			{
+			if(x<-dimx+resx/2) cc=colourOfMarker; else cc=colourOfBody;
+			display3dMoveTo([x,dimy,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([x,dimy,-dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([x,-dimy,-dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([x,-dimy,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			display3dLineTo([x,dimy,dimz],linposWorldCoord,angmat, solidMaxdim, cc);
+			}
+		//ctx.stroke();
+		return;
+		}
+
+
+
+
+	function displayTarget()
+		{
+		//display Target position
+		ctx.beginPath();
+		ctx.strokeStyle="#666622";
+		ctx.fillStyle="#666622";
+		ctx.arc(grXC+grXS*stateWorldCoordsRequired.linpos[1]/(1+stateWorldCoordsRequired.linpos[0]/zz), 
+		        grYC+grYS*stateWorldCoordsRequired.linpos[2]/(1+stateWorldCoordsRequired.linpos[0]/zz), 
+		        -grYS*0.03/(1+stateWorldCoordsRequired.linpos[0]/zz), 
+		        0, 2 * Math.PI);
+		ctx.closePath();
+		ctx.fill();
+		ctx.stroke();
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Display of the craft and its state physics numbers                         *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide display of the craft and state information 
+ * relating to it.
+ * 
+ * The function displaySolid() is defined when the physical object is selected
+ * below, so as to ensure the correct object is displayed.
+ * 
+ * 
+ */
+
+
+	function displayCraftState(state,colourOfBody,colourOfMarker)
+		{
+		var S = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(S, state);
+		displaySolid(negVector(3, S.linpos), negVector(3, S.angpos), colourOfBody, colourOfMarker ); //Transformation from the object coords to world coords
+		return;		
+		}
+
+
+	function displayCraftMeasuredState(stateMeasured,colourOfBody,colourOfMarker)
+		{
+		var S = {gps:[0,0,0],magvec:[0,0,0],rotvel:[0,0,0], linacc:[0,0,0]}
+		unpackMeasuredState(S,stateMeasured);
+		displaySolid(negVector(3, S.gps), negVector(3, S.magvec), colourOfBody, colourOfMarker ); //Transformation from the object coords to world coords
+		return;		
+		}
+
+
+	function displayCraftPhysicsNumbers(state,x,y)
+		{
+		var S = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(S, state);
+
+		//Display numeric data
+
+		//Craft coords
+		displayTitle(x+0.2,y,"CRAFT");
+		displayTitle(x+0.2,y-0.05,"COORDS");
+		displayVector(3,S.angfor,"angfor",x+0,y+0);                                         //torque craft
+		var angmom = multMatrixVector(3,3,mat33CraftCoordWorldInertia,S.angvel);
+		displayVector(3,angmom,"angmom",x+0,y-0.2);                                        //angmom craft
+
+			displayVector(3,S.angvel,"angvel",x+0.2,y-0.2);                                //S.angvel craft
+			displayVector(3,S.angpos,"angpos",x+0.2,y-0.4);                                 //angpos craft                           
+
+		//World coords
+		var angmat = multMatrices(3,3,3,[[-1,0,0],[0,-1,0],[0,0,-1]],getRotationMatrixFromRotvec33(negVector(3,S.angpos))); 
+		//angpos is the angle of the world in the craft coords, it is nagated to get the angle of the craft in the world coords, 
+		//so as to generat the matrix for rotating any vector in craft coords to the same vector in world coords.
+		//The matrix is then negated because the craft state vectors in craft coords are equal and opposite to the craft state vectors in world coords
+		//TODO
+
+		displayTitle(x+0.8,y,"WORLD");
+		displayTitle(x+0.8,y-0.05,"COORDS");
+		displayVector(3,multMatrixVector(3,3,angmat,S.angfor),"angfor",x+0.6,y+0);          //angfor world
+		displayVector(3,multMatrixVector(3,3,angmat,angmom),"angmom",x+0.6,y-0.2);         //angmom world
+
+			displayVector(3,multMatrixVector(3,3,angmat,S.angvel),"angvel",x+0.8,y-0.2);   //S.angvel world
+			displayVector(3,multMatrixVector(3,3,angmat,S.angpos),"angpos",x+0.8,y-0.4);    //angpos world
+
+		//Other
+		displayScalar(lenVector(3,angmom),"Tot angmom",x+1.2,y+0);                        //length angmom
+		var kenergy = mat33CraftCoordWorldInertia[0][0]*S.angvel[0]*S.angvel[0]/2 
+				+ mat33CraftCoordWorldInertia[1][1]*S.angvel[1]*S.angvel[1]/2 
+				+ mat33CraftCoordWorldInertia[2][2]*S.angvel[2]*S.angvel[2]/2;
+		displayScalar(kenergy,"k-energy",x+1.2,y-0.4);                                     //kenetic energy
+
+		return;
+		}
+
+
+	function displayState(statePacked,y,z)
+		{
+		var S = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(S, statePacked);
+		displayVector(3,S.linpos,"linpos",y+0.0,z);
+		displayVector(3,S.angpos,"angpos",y+0.2,z);
+		displayVector(3,S.linvel,"linvel",y+0.4,z);
+		displayVector(3,S.angvel,"angvel",y+0.6,z);
+		displayVector(3,S.linfor,"linfor",y+0.8,z);
+		displayVector(3,S.angfor,"angfor",y+1.0,z);
+		return;
+		}
+
+
+	function displayMeasuredState(statePacked,y,z)
+		{
+		var S = {gps:[0,0,0],magvec:[0,0,0],rotvel:[0,0,0], linacc:[0,0,0]}
+		unpackMeasuredState(S, statePacked);
+		displayVector(3,S.gps,"gps",y+0.0,z);
+		displayVector(3,S.magvec,"magvec",y+0.2,z);
+		displayVector(3,S.rotvel,"rotvel",y+0.4,z);
+		displayVector(3,S.linacc,"linacc",y+0.6,z);
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Mouse input functions                                                      *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide some basic 3d objects that can be displayed.
+ * 
+ * The first line parameters gives the size of the object and the second line 
+ * gives a position vector rotation vector according to the right hand rule.
+ * The third line of parameters are about colour.
+ * 
+ */
+
+
+	//Mouse position is global to all mouse functions and values are held from start to end of execution
+	var mouseXpos = 0;
+	var mouseYpos = 0;
+	var mouseZpos = 0;
+	var mouseDownZpos = 0;
+	var mouseDownXpos = 0;
+	var mouseDownYpos = 0;
+	var mouseRotate=false;
+
+	//Seek Position
+	var stateWorldCoordsRequired = {linpos:[0,0,0],angpos:[0,0,0]};
+
+
+	function mouseClickHandler(e) 
+		{
+		return;
+		}
+
+
+	function onMouseDown() 
+		{
+		mouseRotate=true;
+		mouseDownZpos = mouseZpos;
+		mouseDownXpos = mouseXpos;
+		mouseDownYpos = mouseYpos; 
+		return;
+		}
+
+
+	function onMouseUp() 
+		{
+		mouseRotate=false;
+		return;
+		}
+
+
+	function onMouseWheel(e) 
+		{
+		mouseXpos-=e.deltaY*0.01;
+		mouseYpos = (e.clientX-grXC)/grXS;
+		mouseZpos = (e.clientY-grYC)/grYS; 
+		if(mouseRotate)
+			{
+			setPitchYawRoll()
+			}
+		else
+			{
+			if(mouseXpos<0) mouseXpos=0;  //if(mouseZpos<0) mouseZpos=0;
+			stateWorldCoordsRequired.linpos[0] = mouseXpos;
+			stateWorldCoordsRequired.linpos[1] = mouseYpos; 
+			stateWorldCoordsRequired.linpos[2] = mouseZpos; 
+			}
+
+		return;
+		}
+
+
+	function mouseMove(e) 
+		{
+		mouseYpos = (e.clientX-grXC)/grXS;
+		mouseZpos = (e.clientY-grYC)/grYS; 
+		if(mouseRotate)
+			{
+			setPitchYawRoll();
+			}
+
+		return;
+		}
+
+
+	function setPitchYawRoll()
+		{	
+/*	var rotCraft = [1,0,0,0];//getQuaternionFromRotvec(copyVectorFromInVector(3,vec18WorldCoordWorldState,3)); //Get the rotation of the craft as a quaternion
+		var yawCraft = getQuaternionForBase(2,(mouseYpos-mouseDownYpos)/5);
+		var pitchCraft = getQuaternionForBase(1,-(mouseZpos-mouseDownZpos)/5);
+		var rollCraft = getQuaternionForBase(0,-(mouseXpos-mouseDownXpos)/5);
+		rotCraft = multQuaternion(rotCraft,yawCraft);
+		rotCraft = multQuaternion(rotCraft,pitchCraft);
+		rotCraft = multQuaternion(rotCraft,rollCraft);
+		copyVector(3, stateWorldCoordsRequired.angpos,getRotvecFromQuaternion(rotCraft));*/
+		stateWorldCoordsRequired.angpos[0] = -(mouseXpos-mouseDownXpos)*Math.PI/2;
+		stateWorldCoordsRequired.angpos[1] = -(mouseZpos-mouseDownZpos)*Math.PI/2;
+		stateWorldCoordsRequired.angpos[2] = (mouseYpos-mouseDownYpos)*Math.PI/2;
+		return;
+		}
+
+
+	function onMouseOut() 
+		{
+		mouseRotate=false;
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Pilot                                                                      *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * The functions below provide some basic 3d objects that can be displayed.TODO
+ * 
+ * The first line parameters gives the size of the object and the second line 
+ * gives a position vector rotation vector according to the right hand rule.
+ * The third line of parameters are about colour.
+ * 
+ */
+
+
+	//This function is the autopilot and calculates what forces to apply to the craft to reach its seekState
+	function advancePilotComputer(stateCraftCoordGuidance, stateCraftCoordWorld)
+		{
+		//Calculation are always based on the state in the guidance computer not the real world
+		//But the pilot applies forces to the real world as well as the guidance computer.
+		var stateWorld = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(stateWorld, stateCraftCoordWorld);
+		var stateGuidance = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(stateGuidance, stateCraftCoordGuidance);
+
+		//Calculate Rotation matrices
+		var mat33WorldToCraftCoord = [[-1,0,0],[0,-1,0],[0,0,-1]];
+		//var mat33WorldToCraftCoord = getRotationMatrixFromRotvec33(stateGuidance.angpos); 
+		//angpos is the angle of the world in the craft coords, 
+		//used to generat the matrix for rotating any vector in world coords to the same vector in craft coords.
+
+		var targetlinpos = multMatrixVector(3,3,mat33WorldToCraftCoord, stateWorldCoordsRequired.linpos);
+		var targetangpos = multMatrixVector(3,3,mat33WorldToCraftCoord, stateWorldCoordsRequired.angpos);
+
+		if(DEBUG) displayVector(3,stateWorldCoordsRequired.angpos,"AngTarg",0,-0.8);
+
+		//Its calculation are always based on the state in the guidance computer not the real world
+		var accelerations = [0,0,0,0,0,0];
+		var k=32;
+		var c= 2.4*Math.sqrt(scaWorldMass*k);
+		var kr=32;
+		//var cr= 0.4*2*Math.sqrt(mat33CraftCoordWorldInertia[0][0]*kr + mat33CraftCoordWorldInertia[1][1]*kr + mat33CraftCoordWorldInertia[2][2]*kr);
+		var cr= 2.4*Math.sqrt(scaWorldMass*kr);
+
+		//Linear
+		var linacc = [0,0,0]; 
+		linacc[0] = (targetlinpos[0]-stateGuidance.linpos[0])*k - stateGuidance.linvel[0]*c;
+		linacc[1] = (targetlinpos[1]-stateGuidance.linpos[1])*k - stateGuidance.linvel[1]*c;
+		linacc[2] = (targetlinpos[2]-stateGuidance.linpos[2])*k - stateGuidance.linvel[2]*c;
+		//Rotation
+		var angacc = [0,0,0]; 
+		angacc[0] = (targetangpos[0]-stateGuidance.angpos[0])*kr - stateGuidance.angvel[0]*cr;
+		angacc[1] = (targetangpos[1]-stateGuidance.angpos[1])*kr - stateGuidance.angvel[1]*cr;
+		angacc[2] = (targetangpos[2]-stateGuidance.angpos[2])*kr - stateGuidance.angvel[2]*cr;
+
+		//***Linear Acceleration
+		//Calculate linear forces required from accelerations
+		var linfor = divVectorByScalar(3,linacc,scaWorldMass);
+
+
+		//***Angular Acceleration
+		//Calculate angular forces required from accelerations
+		//https://en.wikipedia.org/wiki/Rigid_body_dynamics
+		//https://en.wikipedia.org/wiki/Euler%27s_equations_(rigid_body_dynamics)
+		//http://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node68.htmlhttp://farside.ph.utexas.edu/teaching/336k/Newtonhtml/node68.html
+
+		//From the accelerations vector get the torque = I*angacc + angvel X (I angvel) Euler's equation
+		var angfor = addVectors(3,multMatrixVector(3,3,mat33CraftCoordWorldInertia,angacc),
+			crossprodVectors3(stateGuidance.angvel,multMatrixVector(3,3,mat33CraftCoordWorldInertia,stateGuidance.angvel))
+			);
+
+
+
+//angfor[1]=0.000001;
+		//Calculation are always based on the state in the guidance computer not the real world
+		//But the pilot applies forces to the real world as well as the guidance computer.
+		copyVector(3, stateGuidance.linfor,linfor);
+		copyVector(3, stateWorld.linfor,linfor);
+		copyVector(3, stateGuidance.angfor,angfor);
+		copyVector(3, stateWorld.angfor,angfor);
+
+		packState(stateCraftCoordWorld,stateWorld);
+		packState(stateCraftCoordGuidance,stateGuidance);
+
+
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Physical objects                                                           *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+/**
+ * These code segments provide the physical details of objects whose motion 
+ * is to be simulated.
+ * 
+ * By uncommenting the block of code for a given object it will be made the 
+ * simulated object.
+ * 
+ * These physical details are;
+ * - Dimensions 
+ * - Mass
+ * - Inertia matrix in craft coordinates
+ * - The initial state vector  in craft coordinates
+ * 
+ */
+
+
+/*******************************************************************************
+*   Torous                                                                     *
+*******************************************************************************/
+
+/*
+//INPUT Physical dimensions of the object
+	var objectXdim = 0.335; 
+	var objectYdim = 0.035;
+	var solidMaxdim = 0.335;
+
+//INPUT Physical properties of the object
+	// Mass
+	var scaWorldMass = 1.850; //Kg
+	// Inertia Tensor
+	var mat33CraftCoordWorldInertia = [[0,0,0], [0,0,0], [0,0,0]]; //Inertia Matrix below formula for torus
+	mat33CraftCoordWorldInertia[0][0] = scaWorldMass * (4*objectXdim*objectXdim + 5*objectYdim*objectYdim) / 8;
+	mat33CraftCoordWorldInertia[1][1] = scaWorldMass * (4*objectXdim*objectXdim + 3*objectYdim*objectYdim) / 4;
+	mat33CraftCoordWorldInertia[2][2] = scaWorldMass * (4*objectXdim*objectXdim + 5*objectYdim*objectYdim) / 8;
+
+//INPUT Initial conditions, choose one.
+//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,1,0,  0,0,0,  0,0,0]; //Turned 90 on x Flat no force
+	//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0, 0,0,0,  0,0,0,  0,0,0]; //Turned 90 on y
+	//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0, 0,0,0,  0,0,0,  0,0,0]; //Turned 90 on z
+	var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,5,0,  0,0,0,  0,0,0]; //Original
+ 
+
+	function displaySolid(linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker)
+		{
+		displayTorus(objectXdim, objectYdim, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker);
+		return;
+		}
+
+*/
+/*******************************************************************************
+*   Ellipsoid                                                                  *
+*******************************************************************************/
+
+//INPUT Physical dimensions of the object
+	var objectXdim = 0.5; 
+	var objectYdim = 0.25;
+	var objectZdim = 0.1;
+	var solidMaxdim = 0.5;
+
+
+//INPUT Physical properties of the object
+	var scaWorldMass = 2; //Kg
+	var mat33CraftCoordWorldInertia = [[0,0,0], [0,8,0], [0,0,0]]; //Inertia Matrix below formula for ellipsoid
+	mat33CraftCoordWorldInertia[0][0] = scaWorldMass * (objectYdim*objectYdim + objectZdim*objectZdim) / 5;
+	mat33CraftCoordWorldInertia[1][1] = scaWorldMass * (objectXdim*objectXdim + objectZdim*objectZdim) / 5;
+	mat33CraftCoordWorldInertia[2][2] = scaWorldMass * (objectXdim*objectXdim + objectYdim*objectYdim) / 5;
+
+//INPUT Initial conditions, choose one.
+	//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0.01,0.2,0.01,   0,0,0,  0,0,0];
+	var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,0,0,  0,0,0,  0,0,0]; //Original
+
+
+	function displaySolid(linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker)
+		{
+		displayEllipsoid(objectXdim, objectYdim, objectZdim, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker);
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*   Cylinder                                                                   *
+*******************************************************************************/
+/*
+//INPUT Physical dimensions of the object
+	var objectXdim = 0.05; //Half depth
+	var objectYdim = 0.5; //Half width
+	var objectZdim = 0.05; //Half height
+	var solidMaxdim = 0.5;
+
+
+//INPUT Physical properties of the object
+	var scaWorldMass = 2; //Kg
+	var mat33CraftCoordWorldInertia = [[0,0,0], [0,0,0], [0,0,0]]; //Inertia Matrix below formula for ellipsoid
+	mat33CraftCoordWorldInertia[0][0] = scaWorldMass * (objectYdim*objectYdim + 3*objectZdim*objectZdim) / 12;
+	mat33CraftCoordWorldInertia[1][1] = scaWorldMass * (objectXdim*objectXdim + objectZdim*objectZdim) / 4;
+	mat33CraftCoordWorldInertia[2][2] = scaWorldMass * (3*objectXdim*objectXdim + objectYdim*objectYdim) / 12;
+
+//INPUT Initial conditions, choose one.
+	//var vec18WorldCoordWorldState = [0,0,0, 0,0,0,  0,0,0,  0,1,0,  0,0,0,  0,0,0];
+	var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,5,1,   0,0,0,  0,0,0]; //Original
+
+
+	function displaySolid(linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker)
+		{
+		displayCylinder(objectXdim, objectYdim, objectZdim, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker);
+		return;
+		}
+*/
+
+/*******************************************************************************
+*   Tube                                                                       *
+*******************************************************************************/
+/*
+//INPUT Physical dimensions of the object
+	var objectXdim = 0.5; //Half depth
+	var objectYdim = 0.12; //Half width
+	var objectZdim = 0.5; //Half height
+	var objectXhdim = 0.24; //Half depth
+	var objectZhdim = 0.24; //Half height
+	var solidMaxdim = 0.5;
+
+
+//INPUT Physical properties of the object
+	var scaWorldMass = 2; //Kg
+	var mat33CraftCoordWorldInertia = [[0,0,0], [0,0,0], [0,0,0]]; //Inertia Matrix below formula for ellipsoid
+	mat33CraftCoordWorldInertia[0][0] = scaWorldMass * (objectYdim*objectYdim + 3*(objectZdim*objectZdim+objectZhdim*objectZhdim)) / 12;
+	mat33CraftCoordWorldInertia[1][1] = scaWorldMass * ((objectXdim*objectXdim+objectXhdim*objectXhdim) + (objectZdim*objectZdim+objectZhdim*objectZhdim)) / 4;
+	mat33CraftCoordWorldInertia[2][2] = scaWorldMass * (3*(objectXdim*objectXdim+objectXhdim*objectXhdim) + objectYdim*objectYdim) / 12;
+
+//INPUT Initial conditions, choose one.
+	//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,1,0,  0,0,0,  0,0,0];
+	var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  -1.5,0.4,0,  0,0,0,  0,0,0]; //Original
+
+
+	function displaySolid(linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker)
+		{
+		displayTube(objectXdim, objectYdim, objectZdim, objectXhdim, objectZhdim, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker);
+		return;
+		}
+*/
+
+/*******************************************************************************
+*   Cuboid                                                                     *
+*******************************************************************************/
+/*
+//INPUT Physical dimensions of the object
+	var objectXdim = 0.5; //Half depth
+	var objectYdim = 0.25; //Half width
+	var objectZdim = 0.05; //Half height
+	var solidMaxdim = 0.5;
+
+
+//INPUT Physical properties of the object
+	var scaWorldMass = 2; //Kg
+	var mat33CraftCoordWorldInertia = [[0,0,0], [0,8,0], [0,0,0]]; //Inertia Matrix below formula for ellipsoid
+	mat33CraftCoordWorldInertia[0][0] = scaWorldMass * (objectYdim*objectYdim + objectZdim*objectZdim) / 3;
+	mat33CraftCoordWorldInertia[1][1] = scaWorldMass * (objectXdim*objectXdim + objectZdim*objectZdim) / 3;
+	mat33CraftCoordWorldInertia[2][2] = scaWorldMass * (objectXdim*objectXdim + objectYdim*objectYdim) / 3;
+
+//INPUT Initial conditions, choose one.
+	//var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0.01,0.2,0.01,   0,0,0,  0,0,0];
+	var stateCraftCoordWorld = [0,0,0, 0,0,0,  0,0,0,  0,0,0,   0,0,0,  0,0,0]; //Original
+
+
+	function displaySolid(linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker)
+		{
+		displayCuboid(objectXdim, objectYdim, objectZdim, solidMaxdim,
+		                 linposWorldCoord,angposWorldCoord,colourOfBody,colourOfMarker);
+		return;
+		}
+
+*/
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   State vector functions                                                     *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+
+
+
+	/**
+	 * Thes function support the handling of state vectors.
+	 * 
+	 * The state vector is used in two formats;
+	 *   var statePacked=[0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+	 *   var stateUnpacked = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+	 * Having these two formats makes the code more readable and simpler at various 
+	 * points. 
+	 * 
+	 * linpos - is the linear position
+	 * angpos - the vector is the axis of rotation and the length is the amount
+	 *          in radians. The right hand rule applies.
+	 * linvel - linear velocity
+	 * angvel - the vector is the axis of rotation and the length is the velocity 
+	 * 				
+	 * linfor - is the linear force being applied to the body
+	 * angfor - is the angular force (torque) being applied to the body
+	 * 
+	 */
+
+
+	function copyState(stateOut, inState)
+		{
+		for(var i=0;i<18;i++) stateOut[i] = inState[i];
+		return;
+		}
+
+
+	function packState(statePacked, stateUnpacked)
+		{
+		//var statePacked=[0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		for(var i=0;i<3;i++) statePacked[ 0+i] = stateUnpacked.linpos[i];
+		for(var i=0;i<3;i++) statePacked[ 3+i] = stateUnpacked.angpos[i];
+		for(var i=0;i<3;i++) statePacked[ 6+i] = stateUnpacked.linvel[i];
+		for(var i=0;i<3;i++) statePacked[ 9+i] = stateUnpacked.angvel[i];
+		for(var i=0;i<3;i++) statePacked[12+i] = stateUnpacked.linfor[i];
+		for(var i=0;i<3;i++) statePacked[15+i] = stateUnpacked.angfor[i];
+		return;
+		}
+
+
+	function unpackState(stateUnpacked, statePacked)
+		{
+		//var stateUnpacked = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]}
+		for(var i=0;i<3;i++) stateUnpacked.linpos[i] = statePacked[ 0+i];
+		for(var i=0;i<3;i++) stateUnpacked.angpos[i] = statePacked[ 3+i];
+		for(var i=0;i<3;i++) stateUnpacked.linvel[i] = statePacked[ 6+i];
+		for(var i=0;i<3;i++) stateUnpacked.angvel[i] = statePacked[ 9+i];
+		for(var i=0;i<3;i++) stateUnpacked.linfor[i] = statePacked[12+i];
+		for(var i=0;i<3;i++) stateUnpacked.angfor[i] = statePacked[15+i];
+		return;
+		}
+
+
+
+
+	/**
+	 * Thes function support the handling and display of measurment state vectors.
+	 * The measurment state vectors do not describe the system in full like 
+	 * the state vectors above but only describe what can be measured.
+	 * 
+	 * 
+	 * The state vector is used in two formats;
+	 *   var statePacked=[0,0,0, 0,0,0, 0,0,0, 0,0,0];
+	 *   var stateUnpacked = {gps:[0,0,0],magvec:[0,0,0],rotvel:[0,0,0], linacc:[0,0,0]};
+	 * Having these two formats makes the code more readable and simpler at various 
+	 * points. 
+	 * 
+	 * gps - is the linear position
+	 * magvec - the vector is the axis of rotation and the length is the amount
+	 *          in radians. The right hand rule applies.
+	 * rotvel - the vector is the axis of rotation and the length is the velocity 
+	 * linacc - is the linear acceleration
+	 * 
+	 */
+
+
+	function packObservationState(statePacked, stateUnpacked)
+		{
+		//var statePacked=[0,0,0, 0,0,0, 0,0,0, 0,0,0];
+		for(var i=0;i<3;i++) statePacked[ 0+i] = stateUnpacked.gps[i];
+		for(var i=0;i<3;i++) statePacked[ 3+i] = stateUnpacked.magvec[i];
+		for(var i=0;i<3;i++) statePacked[ 6+i] = stateUnpacked.rotvel[i];
+		for(var i=0;i<3;i++) statePacked[ 9+i] = stateUnpacked.linacc[i];
+		return;
+		}
+
+
+	function unpackMeasuredState(stateUnpacked, statePacked)
+		{
+		//var stateUnpacked = {gps:[0,0,0],magvec:[0,0,0],rotvel:[0,0,0], linacc:[0,0,0]};
+		for(var i=0;i<3;i++) stateUnpacked.gps[i] = statePacked[ 0+i];
+		for(var i=0;i<3;i++) stateUnpacked.magvec[i] = statePacked[ 3+i];
+		for(var i=0;i<3;i++) stateUnpacked.rotvel[i] = statePacked[ 6+i];
+		for(var i=0;i<3;i++) stateUnpacked.linacc[i] = statePacked[ 9+i];
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Simulation                                                                  *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Time advancing                                                              *
+*                                                                              *
+*******************************************************************************/
+
+	/**
+	 * The advanceTime functions are the main functions from which all others are 
+	 * called. They are responsible for the clock.
+	 * 
+	 * 
+	 * 
+	 * 
+	 * 
+	 * 
+	 * 
+	 * @param - scass - a state vector into which a measured state will be put.
+	 * 
+	 * @param - mat33CraftCoordInertia - The current state of the world simulation
+	 * 
+	 * @param - S - The state according to the guidance computer
+	 * 
+	 * @param - deltaTime - time interval between guidance computer's stored state and covariance and current time
+	 * 
+	 */
+
+
+
+	function advanceTimeStart()
+		{
+		copyState(stateCraftCoordGuidance, stateCraftCoordWorld);
+		//stateCraftCoordGuidance[1] +=10; //Shift to one side just to proove it will find its way back
+		setInterval(advanceTime,5); //INPUT Set up for 5ms polling
+		//Nothing to do here yet
+		return;		
+		}
+
+
+	function advanceTimeFinish()
+		{
+		//Nothing to do here yet
+		return;		
+		}
+
+
+	//Set up clock
+	var d = new Date();
+	var timeOfLastIteration = d.getTime()/1000;
+	var timeFromStarting = 0;
+
+
+	function advanceTime()
+		{
+		//**** Time
+		var d = new Date();
+		deltaTime = d.getTime()/1000 - timeOfLastIteration; 
+		deltaTime = 0.05; //INPUT comment out this line to use real time otherwise it is the fixed intervel deltaTime for each iteration
+		timeOfLastIteration += deltaTime; 
+		timeFromStarting += deltaTime;
+
+
+		displayClear();
+
+		//**** Real world
+		advanceWorldSimulation(scaWorldMass, mat33CraftCoordWorldInertia,stateCraftCoordWorld, stateCraftCoordWorld, deltaTime);
+		if(DEBUG) displayCraftPhysicsNumbers(stateCraftCoordWorld,-0.8,-0.2);
+		displayCraftState(stateCraftCoordWorld, [0xFF,0,0], [0xFF,0xFF,0xFF] ); //Transformation from the object coords to world coords
+
+		//**** Measurements
+		var stateCraftCoordMeasured = [0,0,0, 0,0,0, 0,0,0, 0,0,0];
+		measureWorldSimulation(stateCraftCoordMeasured, stateCraftCoordGuidance, stateCraftCoordWorld, deltaTime);
+
+		//stateCraftCoordMeasured[1]=.05;
+		displayCraftMeasuredState(stateCraftCoordMeasured, [0x66,0x66,0x66], [0x88,0x88,0x88] ); //Transformation from the object coords to world coords
+
+		//**** Guidance computer
+		advanceGuidanceComputer(stateCraftCoordMeasured, deltaTime);
+		//stateCraftCoordGuidance[1]=0.1;
+		displayCraftState(stateCraftCoordGuidance, [0,0xFF,0], [0xFF,0xFF,0xFF] ); //Transformation from the object coords to world coords
+
+		//**** Pilot computer
+		advancePilotComputer(stateCraftCoordGuidance, stateCraftCoordWorld);
+displayTarget();
+		displayAxes();
+		return;		
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Physics of motion in delta time                                            *
+*                                                                              *
+*******************************************************************************/
+
+	/**
+	 * This three function are responsible for all the motion physics
+	 * 
+	 */
+
+	/**
+	 * This function advances a state of an object through a small increment of time.
+	 * It is accessed by the rest of the code through the two functions below it.
+	 * 
+	 * @param - scaMass - The mass of the craft in Kg.
+	 * 
+	 * @param - mat33CraftCoordInertia - The craft's inertia tensor in craft coordinates.
+	 * 
+	 * @param - S - The state of the craft in the craft coordinate system.
+	 * 
+	 * @param - deltaTime - time interval by which the state is to be advanced.
+	 * 
+	 */
+
+	function motionProcessDeltaPhysics(scaMass, mat33CraftCoordInertia,S,deltaTime)
+		{
+		//**** Linear motion
+		S.linvel = addVectors(3,S.linvel,multVectorByScalar(3,S.linfor,deltaTime/scaMass)); //deltaVelocity = Force / Mass * deltaTime 
+		S.linpos = addVectors(3,S.linpos,multVectorByScalar(3,S.linvel,deltaTime));         //deltaPosition = Velocity * deltaTime
+
+		//**** Angular motion
+		// Calculate the angular acceleration : 
+		// Eulers equation for rigid body motion is used to find the accelerations from the torques and current angular velocities
+		// Note that the + should be - according to what I am reading but it just doesn't work with -!! TODO
+		var angacc = [0,0,0];
+		angacc[0] = ( S.angfor[0] + (mat33CraftCoordInertia[2][2] - mat33CraftCoordInertia[1][1])*S.angvel[2]*S.angvel[1]) / mat33CraftCoordInertia[0][0];
+		angacc[1] = ( S.angfor[1] + (mat33CraftCoordInertia[0][0] - mat33CraftCoordInertia[2][2])*S.angvel[0]*S.angvel[2]) / mat33CraftCoordInertia[1][1];
+		angacc[2] = ( S.angfor[2] + (mat33CraftCoordInertia[1][1] - mat33CraftCoordInertia[0][0])*S.angvel[1]*S.angvel[0]) / mat33CraftCoordInertia[2][2];
+
+		//Intergrate - deltaAngularVelocity = AngularAcceleration * deltaTime
+		S.angvel[0] += angacc[0] * deltaTime;
+		S.angvel[1] += angacc[1] * deltaTime;
+		S.angvel[2] += angacc[2] * deltaTime;
+
+		//Integrate for angular position is NOT so simple as deltaAngularPosition = AngularVelocity * deltaTime
+		//Instead convert AngularVelocity * deltaTime to a rotation quaternion
+		//also convert AngularPosition to a rotation quaternion
+		//multiply them to get a resulting rotation quaternion and then convert it back to the rotation vector angpos.
+		S.angpos =	getRotvecFromQuaternion( multQuaternion( 
+						getQuaternionFromRotvec(multVectorByScalar(3,S.angvel,deltaTime) ), 
+						getQuaternionFromRotvec(S.angpos) 
+					) ); //With quaternions the second rotation comes first
+		return;
+		}
+
+	
+
+
+	/**
+	 * This function advances a state of an object through a small increment of time.
+	 * It is used primarily by the guidance computer.
+	 * It uses motionProcessDeltaPhysics() above to do the actual physics of the motion.
+	 * 
+	 * It simply calls motionProcessDeltaPhysics above multiple times. This is because 
+	 * by subdividing deltaTime into smaller intervals the result is more accurate
+	 * and it is not necessary to re-display the image at each iteration or perform 
+	 * other functions so frequently.
+	 * 
+	 * The number of sub-iterations is set in the variable numberOfIterations.
+	 * 
+	 * 
+	 * @param - scaMass - The mass of the craft in Kg.
+	 * 
+	 * @param - mat33CraftCoordInertia - The craft's inertia tensor in craft coordinates.
+	 * 
+	 * @param - oldstate - The state of the craft in the craft coordinate system before advancing time.
+	 * 
+	 * @param - state - The state of the craft in the craft coordinate system after advancing time.
+	 * 
+	 * @param - deltaTime - time interval by which the state is to be advanced.
+	 * 
+	 */
+
+	function motionProcessPhysicsF(scaMass, mat33CraftCoordInertia, oldstate, state, deltaTime)
+		{
+		var S = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(S, oldstate);
+
+		//To improve accuracy and because display updating takes a lot longer than calculating the physics 
+		//it is best to do multiple iterations between display updates, this loop does those physical iterations.
+		const numberOfIterations = 10;
+		deltaTime = deltaTime/numberOfIterations; 
+		for(q=0;q<numberOfIterations;q++)
+			{
+			motionProcessDeltaPhysics(scaMass, mat33CraftCoordInertia,S,deltaTime);
+			}
+		packState(state,S);
+
+		return;
+		}
+
+
+
+
+	/**
+	 * This function advances a state of an object through a small increment of time.
+	 * It is used primarily by the real world simulation and so is more accurate but 
+	 * otherwise identical to the above.
+	 * It uses motionProcessDeltaPhysics() above to do the actual physics of the motion.
+	 * 
+	 * It simply calls motionProcessDeltaPhysics above multiple times. This is because 
+	 * by subdividing deltaTime into smaller intervals the result is more accurate
+	 * and it is not necessary to re-display the image at each iteration or perform 
+	 * other functions so frequently.
+	 * 
+	 * The number of sub-iterations is set in the variable numberOfIterations.
+	 * The number set will generally be higher than the above function so as to give 
+	 * added accuracy.
+	 * 
+	 * @param - scaMass - The mass of the craft in Kg.
+	 * 
+	 * @param - mat33CraftCoordInertia - The craft's inertia tensor in craft coordinates.
+	 * 
+	 * @param - oldstate - The state of the craft in the craft coordinate system before advancing time.
+	 * 
+	 * @param - state - The state of the craft in the craft coordinate system after advancing time.
+	 * 
+	 * @param - deltaTime - time interval by which the state is to be advanced.
+	 * 
+	 */
+
+
+	function advanceWorldSimulation(scaMass, mat33CraftCoordInertia, oldstate, state, deltaTime)
+		{
+		var S = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(S, oldstate);
+
+		//To improve accuracy and because display updating takes a lot longer than calculating the physics 
+		//it is best to do multiple iterations between display updates, this loop does those physical iterations.
+		const numberOfIterations = 100;
+		deltaTime = deltaTime/numberOfIterations; 
+
+		for(q=0;q<numberOfIterations;q++)
+			{
+			motionProcessDeltaPhysics(scaMass, mat33CraftCoordInertia,S,deltaTime);
+			}
+		packState(state,S);
+
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Measurement from sensors                                                   *
+*                                                                              *
+*******************************************************************************/
+
+
+
+	/**
+	 * This function maps the craft state vector onto the corresponding measurment vector
+	 * which may seem to be the wrong way around but this is the way the Kalman filtering likes it
+	 * and it is also used in simulating the measurement process,
+	 * 
+	 * The whole function uses craft coordinates not world coordinates except where stated below.
+	 * 
+	 * The measured state is generated from the world state primarily but also uses some information 
+	 * from the guidance state in making use of direction vectors like the magnatometer vector.
+	 * 
+	 * Direction vectors like the magnatometer vector are processed as follows:-
+	 * Direction vectors have a known value in the world coords. The craft measures a direction vectors in craft coordinates.
+	 * The angular position in the world state is not known to the guidance computer but the guidance computer needs 
+	 * to estimate it. The guidance computer has a measured direction vector in craft coordinates and the same 
+	 * known direction vector in world coordinates. It is known that a rotation determined by the angular position of 
+	 * the craft has maped the known direction vector to the measured direction vector.
+	 * The objective is to find what the angular position might be.
+	 * 
+	 * 
+	 * The set of angular position vectors that could have done the rotation are in the plane with one axis orthogonal 
+	 * to both the known and measured direction vectors and the other axis in the plane of both direction vectors with equal angle to both.
+	 * So in so far as the guidance computers estimated angular position vector is not in this plane it is in error.
+	 * 
+	 * The current software simply projects the guidance computers angular position vector onto the plane and adjusts TODO
+	 * 
+	 * However when the known and measured direction vectors get close together or coincident  
+	 * TODO
+	 * 
+	 * Direction vector measurement is be simulated by using the angular position in the world state to transform the known vecor to 
+	 * craft coordinates measured vector.
+	 * 
+	 * @param - stateCraftCoordMeasured - a state vector into which a measured state will be put.
+	 * 
+	 * @param - stateCraftCoordWorld - The current state of the world simulation
+	 * 
+	 * @param - stateCraftCoordGuidance - The state according to the guidance computer
+	 * 
+	 */
+
+
+
+	function measurementProcessPhysicsH1(stateCraftCoordMeasured, stateCraftCoordGuidance, stateCraftCoordWorld)
+		{
+		//All local variables are in craft coordinates
+		//The measured state is generated from the world state primarily
+		var stateWorld = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(stateWorld, stateCraftCoordWorld);
+		var stateMeasured = {gps:[0,0,0],magvec:[0,0,0],rotvel:[0,0,0], linacc:[0,0,0]}
+
+
+		//***Make use of the magnatometer vector
+		var stateGuidance = {linpos:[0,0,0],angpos:[0,0,0], linvel:[0,0,0],angvel:[0,0,0], linfor:[0,0,0],angfor:[0,0,0]};
+		unpackState(stateGuidance, stateCraftCoordGuidance);
+		var vec3WorldCoordRotvec = stateGuidance.angpos; //Copy the rotation vector from the guidance computer state
+
+//		var vec3WorldCoordMagnet=[19481,-191,-44677]; //Magnetic vector London in nano Tesla London. +ev (North, East, Up)
+		var vec3WorldCoordMagnet=[0,100,0]; //Magnetic vector London in nano Tesla London. +ev (North, East, Up)
+
+		var angmat = getRotationMatrixFromRotvec33(negVector(3,stateWorld.angpos));
+		var vec3CraftCoordMagnet=multMatrixVector(3,3,angmat,vec3WorldCoordMagnet); //Get in craft coordinates from world coordinates TODO
+
+		//Explaination: The craft's current orientation is calculated by the guidance computer to be vec3WorldCoordRotvec
+		//The actual rotation in the world was such that it mapped vec3WorldCoordMagnet to vec3CraftCoordMagnet
+		//The set of rotation vectors that could have done this mapping are in the plane with one axis orthogonal to both magnetic vectors
+		//and the other axis in the plane of both magnetic vectors (another plane) and with equal angle to both.
+		//So in so far as vec3WorldCoordRotvec is off the first mentioned plane it is in error. So this function projects it onto the first mentioned plane  
+
+/*
+		var costheta = 0.0;
+		costheta = getConstrainVectorToPlaneOfTwoVectors3(vec3WorldCoordRotvec,vec3WorldCoordMagnet,vec3CraftCoordMagnet); 
+		var sintheta =Math.pow(1-costheta*costheta,4);
+		if(sintheta<0.01) sintheta=0.01;
+		var err = (Math.PI/32)/sintheta/20;
+		err = Math.PI/32;
+		stateMeasureStandev[3][3] = err;
+		stateMeasureStandev[4][4] = err; 
+		stateMeasureStandev[5][5] = err; 
+		copyMatrix(12,12,stateMeasureCovariance, multMatrices(12,12,12,stateMeasureStandev,transMatrix(12,12,stateMeasureStandev)));
+*/
+
+		//***Make use of the gravity vector TODO none yet
+		//angfor=crossprodVectors3([0,1,0],rotateVectorByQuaternion(vec3WorldCoordMagnet,stateCraftCoordGuidance.angpos)); 
+		//The downward vector is rotated into the local frame and crossed with the axis vector
+
+
+		//***Covert other state information to the craft coordinates and copy as measured position as appropriate
+		copyVector(3, stateMeasured.gps, stateWorld.linpos); //Linear position These we get from the GPS i.e. world state
+		//copyVector(3, stateMeasured.magvec, vec3WorldCoordRotvec); //This one
+copyVector(3, stateMeasured.magvec, stateWorld.angpos); //not this one TODO
+		copyVector(3, stateMeasured.rotvel, stateWorld.angvel); //Angular velocity from the accelerometers
+		copyVector(3, stateMeasured.linacc, divVectorByScalar(3,stateWorld.linfor,scaWorldMass));
+
+
+		packObservationState(stateCraftCoordMeasured, stateMeasured);
+
+		return;
+		}
+
+
+
+
+	/**
+	 * This function provides the actual measurements at the current time
+	 * 
+	 * It has to advance the previous guidance state to get the current guidance state
+	 * for use in the measurements. This is because this function is called before the guidance computer's
+	 * 
+	 * @param - stateCraftCoordMeasured - a state vector into which a measured state will be put.
+	 * 
+	 * @param - stateCraftCoordWorld - The current state of the world simulation
+	 * 
+	 * @param - stateCraftCoordGuidance - The state according to the guidance computer
+	 * 
+	 */
+
+
+	function measureWorldSimulation(stateCraftCoordMeasured, stateCraftCoordGuidance, stateCraftCoordWorld, deltaTime)
+		{
+		//Although stateCraftCoordWorld is current stateCraftCoordGuidance will be the previous one so calculate current
+		var stateFout = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		motionProcessPhysicsF(scaWorldMass, mat33CraftCoordWorldInertia, stateCraftCoordGuidance, stateFout, deltaTime);
+
+		measurementProcessPhysicsH1(stateCraftCoordMeasured, /*stateFout*/stateCraftCoordGuidance, stateCraftCoordWorld);
+
+		//generate and add to stateCraftCoordMeasured, v the motion process NOISE vector corresponding to R 
+		//the stateMeasuredCovariance added during execution of the function advanceGuidanceComputer() 
+		copyVector(12,
+			stateCraftCoordMeasured, 
+			addmultVectorMatrixVector(12,12,stateCraftCoordMeasured, stateMeasureStandev ,noiseVector(12))
+		);
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*   Guidance computer module                                                    *
+*                                                                              *
+*******************************************************************************/
+
+
+
+
+/**
+ * INPUT The standard deviation for error noise accumulated by the guidance computers craft state vector each time iteration.
+ * The matrix is a diagonal matrix because there are no covariances i.e. there is no interdependencies between the noise of one component and another.
+ * scale is an Iteration Scale Factor set to reflect the accuracy of the guidance computers calculations
+ * This program injects noise into those calculations to reflect the figures placed here.
+ * if the scale is too high the guidence computer state vector will reflect the noise of measurement sensors
+ * if the scale is too low the guidence computer state vector will drift away from the world state vector
+ */
+
+var scale=0.0001; //TODO
+var P=scale*0.005;       //Position accuracy +- meters
+var Q=scale*Math.PI/640; //Angle accuracy radians
+var V=scale*0.5;         //Velocity accuracy metres per second
+var U=scale*5;           //Angular velocity accuracy radians per second
+var T=scale*4;           //Acceleration accuracy metres per second per second
+var S=scale*5;           //Angular acceleration accuracy radians per second per second
+
+var stateCalculationStandev = createMatrixDiagonal(18,18,[P,P,P, Q,Q,Q,  V,V,V, U,U,U,  T,T,T, S,S,S]); //Kalman Q TODO is it
+var stateCalculationCovariance = multMatrices(18,18,18,stateCalculationStandev,transMatrix(18,18,stateCalculationStandev));
+
+
+/**
+ * INPUT The standard deviation for error noise  in the measured values of the craft's sensors
+ * It represents the noise in the craft's onboard GPS. magnetometer and accelerometer sensor measurments.
+ * The matrix is a diagonal matrix because there are no covariances i.e. there is no interdependencies between the noise of one component and another.
+ */
+
+scale=1; //Useful to up or down all figures by a set amount
+var P=scale*0.1; //Position accuracy +- meters
+var Q=scale*Math.PI/32; //Angular position accuracy radians TODO this ones a bit funny because actually we have the magnetometer vector.
+var U=scale*Math.PI/180*36; //Angular velocity radians per second
+var T=scale*0.004;//0.004; //Acceleration accuracy metres per second per second
+
+var stateMeasureStandev = createMatrixDiagonal(12,12,[P,P,P, Q,Q,Q,  U,U,U,  T,T,T]); //Kalman Q TODO is it
+var stateMeasureCovariance = multMatrices(12,12,12,stateMeasureStandev,transMatrix(12,12,stateMeasureStandev));
+
+
+
+	/**
+	 * This function simulates the craft's guidance computer 
+	 * which stores an estimated state of the craft in the vector stateCraftCoordGuidance
+	 * and the estimated error covariance matrix for that state is stored in the matrix stateCraftCoordGuidanceCovariance
+	 * these TODO "persistant" variables values are advanced, from their previous values, in time by the amount given in parameter deltaTime  
+	 * to update them to the current time.
+	 * 
+	 * The guidance computer's estimated state and covariance are derived from a mixture of  
+	 * a current calculated value and the current measured value. The process for doing this is called 
+	 * Extended Kalman Filtering.
+	 * 
+	 * The wikipedia page highlights some of the maths.
+	 * The variable names used in the code and the comments are often duplicitous
+	 * as for a function mathematicians tend to use short names like "F"
+	 * while programmers tend to use long names like "motionProcessPhysics"
+	 * I have struggled to use names that correspond to those in mathematics
+	 * while trying to give some explaination.
+	 * 
+	 * Some other useful things I looked at were;
+	 * http://www.bzarg.com/p/how-a-kalman-filter-works-in-pictures/
+	 * https://www.youtube.com/watch?v=-cD7WkbAIL0&list=PLX2gX-ftPVXU3oUFNATxGXY90AULiqnWT&index=7
+	 * 
+	 * 
+	 * 
+	 * @persistant - stateCraftCoordMeasured - stored estimated state vector of the craft
+	 */
+	var stateCraftCoordGuidance = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+	/**
+	 * @persistant - stateCraftCoordMeasured - stored estimated state vector error covariance matrix
+	 */
+	var stateCraftCoordGuidanceCovariance = createMatrixIdentity(18,18);
+	/**
+	 * 
+	 * @param - stateCraftCoordMeasured - current time measurement vector 
+	 * 
+	 * @param - deltaTime - time interval between guidance computer's stored state and covariance and current time
+	 * 
+	 */
+
+
+
+	function advanceGuidanceComputer(stateCraftCoordMeasured, deltaTime)
+		{
+		//utility variables
+
+
+
+		//************************************************** Calculate the current state and covariance (Predict step)
+		//F is the motion process function which maps x00 the state vector onto x10 the state vector a short time later deltaTime 
+		//B is the motion process control-input function but we dont have one at the moment as F1 is used instead
+		//u is the motion process control-input vector see above
+		//x10 = F*x00 + B*u + w;
+
+		var x00 = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0]; //x00 is the previous state vector
+		copyVector(18, x00, stateCraftCoordGuidance);
+
+		var x10 = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0]; //x10 is the calculated current state vector
+		motionProcessPhysicsF(scaWorldMass, mat33CraftCoordWorldInertia, x00, x10, deltaTime);
+
+		//generate and add to x10, w the motion process NOISE vector corresponding to Q the stateCalculationCovariance below 
+		x10 = addmultVectorMatrixVector(18,18, x10, stateCalculationStandev, noiseVector(18) );
+
+
+		//Work out the jacobian df/dx of the function motionProcessPhysicsF at state x00 used below
+		//Think of the function motionProcessPhysicsF or F as a curved surface which can't be represented by a matrix
+		//and the Jacobian as a flat (tangent) surface locally almost identical to the curved surface and which can be represented by a matrix  
+		//the Jacobian is recalculated for the function in the locality of x00.  
+		var stateFin = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var stateFout = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var stateFindelta = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var stateFoutdelta = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var JacobianFT = createMatrixZero(18,18);
+		copyVector(18, stateFin, x00); //TODO x00 or x10?
+		motionProcessPhysicsF(scaWorldMass, mat33CraftCoordWorldInertia, stateFin, stateFout, deltaTime);
+		//deltaX = lenVector(18, subVectors(18, stateFout, stateFin))/4; if its not moving it won't work!!
+
+		deltaX = deltaX=deltaTime*deltaTime; //TODO find a decent size
+
+		copyVector(18, stateFindelta, stateFin);
+		for(var i=0;i<18;i++)
+			{
+			stateFindelta[i] += deltaX;
+			motionProcessPhysicsF(scaWorldMass, mat33CraftCoordWorldInertia, stateFindelta, stateFoutdelta, deltaTime);
+			JacobianFT[i] = divVectorByScalar(18, subVectors(18, stateFoutdelta, stateFout) , deltaX);
+			stateFindelta[i] -= deltaX;
+			}
+		var JacobianF = transMatrix(18,18,JacobianFT);
+
+		//FT is the transpose of F, the motionProcessPhysicsF function jacobian 
+		//Q is the state motion process noise covariance matrix corresponding to w 
+		//P10 = F*P00*FT + Q;
+
+		var P00 = createMatrixCopy(18,18,stateCraftCoordGuidanceCovariance); //P00 is the previous state vector error covariance matrix
+		//P10 is the calculated current state vector error covariance matrix
+		var P10 = multMatrices(18,18,18,JacobianF, multMatrices(18,18,18,P00, JacobianFT ));
+
+		//add to P10, Q the motion process NOISE matrix corresponding to w derived from stateCalculationStandev above 
+		P10 = addMatrices(18,18,P10,stateCalculationCovariance);
+
+
+
+		//************************************************** Measure the current state (Update step)
+		//Work out the jacobian dh/dx of the function measurementProcessPhysicsH at state x00 used below
+		//Think of the function measurementProcessPhysicsH or H as a curved surface which can't be represented by a matrix
+		//and the Jacobian as a flat (tangent) surface locally almost identical to the curved surface and which can be represented by a matrix
+		//the Jacobian is recalculated for the function in the locality of x00.  
+		var stateHin = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var stateHout = [0,0,0, 0,0,0, 0,0,0, 0,0,0];
+		var stateHindelta = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+		var stateHoutdelta = [0,0,0, 0,0,0, 0,0,0, 0,0,0];
+		var JacobianHT = createMatrixZero(18,18);
+		copyVector(18, stateHin, x10); //TODO x10 or x00?
+		measurementProcessPhysicsH1(stateHout, stateHin, stateHin);
+
+		deltaX = deltaX=deltaTime*deltaTime; //TODO find a decent size
+
+		if(0==deltaX) deltaX=deltaTime*deltaTime;
+		copyVector(18, stateHindelta, stateHin);
+		for(var i=0;i<18;i++)
+			{
+			stateHindelta[i] += deltaX;
+			measurementProcessPhysicsH1(stateHoutdelta, stateHindelta, stateHindelta)
+			JacobianHT[i] = divVectorByScalar(12, subVectors(12, stateHoutdelta, stateHout) , deltaX);
+			stateHindelta[i] -= deltaX;
+			}
+		var JacobianH = transMatrix(12,18,JacobianHT);
+
+
+		//HT is the transpose of H, the measurementProcessPhysicsH function jacobian 
+		//R is the state measurement process noise covariance matrix corresponding to v added 
+		//S = H1*P10*HT1 + R;
+		var S = createMatrixZero(12,12);
+		S = multMatrices(12,18,12,JacobianH, multMatrices(18,18,12,P10, JacobianHT ));
+		//add to S, R or stateMeasureCovariance the measurement process NOISE matrix corresponding to v derived from stateMeasurementStandev 
+		//and added during execution of the function measureWorldSimulation() 
+		S = addMatrices(12,12,S,stateMeasureCovariance);
+
+		//y1 is the measurement difference it is the actual measurement vector z1 or stateCraftCoordMeasured 
+		//minus the calculated measurement vector from the guidance computer's current state x10
+		//this should be a small vector  
+		//y1 = z1 - H1*x10; 
+		var y1 = subVectors(12,stateCraftCoordMeasured,multMatrixVector(12,18,JacobianH,x10));
+
+ 		if(DEBUG) resdif = addVectors(12,multVectorByScalar(12,resdif,0.999),multVectorByScalar(12,y1,0.001));
+
+		//************************************************** Filter
+		//x11 is the filtered current state vector based on x10 the calculated current state vector and 
+		//a correction amount determined by K1 the Kalman gain and y1 the measurement difference. 
+		//K1 determines to what extent the measurement is ignored or used. 
+		//K1 = P10 * HT1 * inverse(S);
+		var K1 = multMatrices(18,18,12, P10, multMatrices(18,12,12, JacobianHT, invMatrix(12,12,S)));
+		//x11 = x10 + K1 * y1;
+		var x11 = addVectors(18,x10,multMatrixVector(18,12,K1,y1)); 
+//var x11 = x10; 
+
+		displayCraftState(x10, [0,0xff,0xff], [0,0xFF,0xFF] ); //Used for debugging
+
+		//P11 is the filtered current state vector covariance based on P10 the calculated current state vector covariance and 
+		//a correction amount determined by K1*H1 the Kalman gain and H the jacobian for measurementProcessPhysicsH.
+		//P11 = (I - K1*H1)*P10;
+		var I = createMatrixIdentity(18,18);
+		var P11 = multMatrices(18,18,18, subMatrices(18,18,I,multMatrices(18,12,18,K1,JacobianH)),P10);
+
+
+		//*** Next Step
+		//P00 = P11; X00 - X11;
+		copyVector(18, stateCraftCoordGuidance, x11);
+		copyVector(18, stateCraftCoordGuidanceCovariance, P11);
+
+		displayMatrix(18,12, K1,"Kalman gain", -1,0.6);  //Used for debugging
+
+		//displayState(x10,-1,0.3);  //Used for debugging
+    //if(DEBUG) displayMeasuredState(resdif,0,0);  //Used for debugging
+		//displayState(x11,-1,-0.3);  //Used for debugging
+
+		return;
+		}
+
+
+var resdif = [0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0];
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   Initialisation and Finalisation Code                                        *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+
+
+	function initalise()
+		{
+		displayStart();
+		advanceTimeStart();
+		return;
+		}
+
+
+	function finalise()
+		{
+		advanceTimeFinish();
+		displayFinish();
+		return;
+		}
+
+
+
+
+/*******************************************************************************
+*                                                                              *
+*                                                                              *
+*   End of Script                                                               *
+*                                                                              *
+*                                                                              *
+*******************************************************************************/
+//00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000111111111111111111111111111111111111111111111111111111111111      
+//00000000111111111122222222223333333333444444444455555555556666666666777777777788888888889999999999000000000011111111112222222222333333333344444444445555555555
+//23456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+	</script>
+
+
+	<body onLoad="initalise();" style="padding:0; margin:0; border:0; overflow:hidden; background: #000;">
+		<canvas id="myCanvas" onmousemove="mouseMove(event)"  onwheel="onMouseWheel(event)" onmouseup="onMouseUp(event)" onmousedown="onMouseDown(event)" onmouseout="onMouseOut()" onclick="mouseClickHandler(event)" tabindex="2"></canvas>
+	</body>
+
+</html>
+
+
+
